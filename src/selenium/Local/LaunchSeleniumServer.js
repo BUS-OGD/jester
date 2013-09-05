@@ -83,8 +83,17 @@ function Seleniumserver(child_process, port, command_line) {
 Seleniumserver.prototype.dispose = function () {
     var self = this;
     if (os.platform().substr(0,3) === "win") {
-        //nasty workaround for the fact that node child_processe's report the wrong PID
-        child_process.exec("taskkill /PID " + self._process.pid + " /F /t");
+        // .kill() does not terminate child processes on Windows.
+        // Use taskkill.exe to kill the entire child process tree.
+        // Needs to be a detached process, otherwise the following scenario will arise.
+        // - node.js started
+        // -    selenium spawned
+        // -        IEDriver spawned
+        // - node.js killed
+        // -    taskkill started
+        // -    taskkill killed
+        // -        IEDriver lives on
+        var killer = child_process.spawn("taskkill", ['/PID', self._process.pid, '/F', '/T'], {detached: true});
     } else {
         self._process.kill("SIGTERM");
     }
@@ -128,11 +137,11 @@ Seleniumserver.prototype._ping = function (callback, timeout) {
 Seleniumserver.prototype._waitFor = function (targetState) {
     var promise = rsvp.promise();
     var self = this;
-    
+
     var currentTry = 0;
     var timeout = 200;
     var maxTryCount = 50; //200 * 50 = 10000 is roughly ten seconds
-    
+
     function isItUpYet(isUp) {
         if (isUp === targetState) {
             self.isRunning = isUp;
@@ -150,18 +159,20 @@ Seleniumserver.prototype._waitFor = function (targetState) {
 };
 
 function LaunchSeleniumServer(port, jarLocation, chromedriverLocation, iedriverLocation) {
-    var command_line = 'java -jar ' + JSON.stringify(jarLocation);
+    var command = 'java';
+    var args = ['-jar', jarLocation];
     if (typeof chromedriverLocation === "string") {
-        command_line += ' "-Dwebdriver.chrome.driver=' + chromedriverLocation + '"';
+        args.push('-Dwebdriver.chrome.driver=' + chromedriverLocation);
     }
     if (typeof iedriverLocation === "string") {
-        command_line += ' "-Dwebdriver.ie.driver=' + iedriverLocation + '"';
+        args.push('-Dwebdriver.ie.driver=' + iedriverLocation);
     }
-    command_line += ' -port ' + port;
+    args.push('-port');
+    args.push(port);
 
-    var javaCommand = child_process.exec(command_line);
+    var javaCommand = child_process.spawn(command, args);
 
-    var server = new Seleniumserver(javaCommand, port, command_line);
+    var server = new Seleniumserver(javaCommand, port, command + ' ' + args.join(' '));
     return server._waitFor(true).then(function () { return server; });
 }
 return LaunchSeleniumServer;
